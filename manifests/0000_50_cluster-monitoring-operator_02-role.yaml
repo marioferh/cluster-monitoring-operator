@@ -449,6 +449,10 @@ rules:
   - securitycontextconstraints
   verbs:
   - use
+- nonResourceURLs:
+  - /federate
+  verbs:
+  - get
 - apiGroups:
   - ""
   resources:

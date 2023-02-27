@@ -405,6 +405,37 @@ func New(
 	}
 	o.controllersToRunFunc = append(o.controllersToRunFunc, csrController.Run, o.ruleController.Run, o.relabelController.Run)
 
+	// csrFederateController runs a controller that requests a client TLS certificate for the telemeter client. This certificate is used to authenticate against the Prometheus /federate API endpoint.
+	csrFederateController, err := csr.NewClientCertificateController(
+		csr.ClientCertOption{
+			SecretNamespace: "openshift-monitoring",
+			SecretName:      "federate-client-certs",
+		},
+		csr.CSROption{
+			ObjectMeta: metav1.ObjectMeta{
+				GenerateName: "system:openshift:openshift-monitoring-",
+				Labels: map[string]string{
+					"metrics.openshift.io/csr.subject": "prometheus",
+				},
+			},
+			Subject:    &pkix.Name{CommonName: "system:serviceaccount:openshift-monitoring:telemeter-client"},
+			SignerName: certapiv1.KubeAPIServerClientSignerName,
+		},
+		kubeInformersOperatorNS.Certificates().V1().CertificateSigningRequests(),
+		o.client.KubernetesInterface().CertificatesV1().CertificateSigningRequests(),
+		kubeInformersOperatorNS.Core().V1().Secrets(),
+		o.client.KubernetesInterface().CoreV1(),
+		o.client.EventRecorder(),
+		"OpenShiftMonitoringTelemeterClientCertRequester",
+	)
+
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to create client certificate controller")
+	}
+	o.controllersToRunFunc = append(o.controllersToRunFunc, csrFederateController.Run)
+
+	o.controllersToRunFunc = append(o.controllersToRunFunc, o.ruleController.Run, o.relabelController.Run)
+
 	return o, nil
 }
 
