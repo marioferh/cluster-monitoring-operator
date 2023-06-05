@@ -60,6 +60,23 @@ func (f *Factory) MetricsClientCerts() (*v1.Secret, error) {
 		return nil, err
 	}
 
+	fmt.Println("mariofer hjajaja metrics ", s)
+
+	s.Namespace = f.namespace
+	s.Data = make(map[string][]byte)
+	s.Annotations = make(map[string]string)
+
+	return s, nil
+}
+
+func (f *Factory) FederateClientCerts() (*v1.Secret, error) {
+	s, err := f.NewSecret(f.assets.MustNewAssetReader(ClusterMonitoringFederateClientCertsSecret))
+	if err != nil {
+		return nil, err
+	}
+
+	fmt.Println("mariofer hjajaja federate ", s)
+
 	s.Namespace = f.namespace
 	s.Data = make(map[string][]byte)
 	s.Annotations = make(map[string]string)

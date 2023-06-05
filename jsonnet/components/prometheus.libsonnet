@@ -167,10 +167,6 @@ function(params)
           resourceNames: ['nonroot'],
           verbs: ['use'],
         },
-        {
-          nonResourceURLs: ['/federate'],
-          verbs: ['get'],
-        },
       ],
     },
 
@@ -331,6 +327,7 @@ function(params)
           'prometheus-k8s-thanos-sidecar-tls',
           'kube-rbac-proxy',
           'metrics-client-certs',
+          'federate-client-certs',
         ],
         externalURL: 'https://prometheus-k8s.openshift-monitoring.svc:9091',
         configMaps: ['serving-certs-ca-bundle', 'kubelet-serving-ca-bundle', 'metrics-client-ca'],
@@ -426,6 +423,7 @@ function(params)
               '--client-ca-file=/etc/tls/client/client-ca.crt',
               '--tls-cipher-suites=' + cfg.tlsCipherSuites,
               '--logtostderr=true',
+              '--v=10',
             ],
             terminationMessagePolicy: 'FallbackToLogsOnError',
             volumeMounts: [

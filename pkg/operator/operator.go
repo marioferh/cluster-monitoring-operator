@@ -135,6 +135,7 @@ const (
 	alertmanagerCABundleConfigMap = "openshift-monitoring/alertmanager-trusted-ca-bundle"
 	grpcTLS                       = "openshift-monitoring/grpc-tls"
 	metricsClientCerts            = "openshift-monitoring/metrics-client-certs"
+	federateClientCerts           = "openshift-monitoring/federate-client-certs"
 
 	// Canonical name of the cluster-wide infrastructure resource.
 	clusterResourceName = "cluster"
@@ -432,9 +433,7 @@ func New(
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create client certificate controller")
 	}
-	o.controllersToRunFunc = append(o.controllersToRunFunc, csrFederateController.Run)
-
-	o.controllersToRunFunc = append(o.controllersToRunFunc, o.ruleController.Run, o.relabelController.Run)
+	o.controllersToRunFunc = append(o.controllersToRunFunc, csrFederateController.Run, o.ruleController.Run, o.relabelController.Run)
 
 	return o, nil
 }
@@ -576,6 +575,7 @@ func (o *Operator) handleEvent(obj interface{}) {
 	case alertmanagerCABundleConfigMap:
 	case grpcTLS:
 	case metricsClientCerts:
+	case federateClientCerts:
 	case uwmConfigMap:
 	default:
 		klog.V(5).Infof("ConfigMap or Secret (%s) not triggering an update.", key)

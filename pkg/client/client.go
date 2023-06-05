@@ -1229,21 +1229,24 @@ func (c *Client) WaitForStatefulsetRollout(ctx context.Context, sts *appsv1.Stat
 func (c *Client) WaitForSecret(ctx context.Context, s *v1.Secret) (*v1.Secret, error) {
 	var result *v1.Secret
 	var lastErr error
-	if err := wait.Poll(1*time.Second, 5*time.Minute, func() (bool, error) {
+	if err := wait.Poll(1*time.Second, 1*time.Minute, func() (bool, error) {
 		var err error
 
 		result, err = c.kclient.CoreV1().Secrets(s.Namespace).Get(ctx, s.Name, metav1.GetOptions{})
+		fmt.Println("result 1", err)
 		if err != nil {
 			lastErr = err
 			return false, nil
 		}
 
 		if len(result.Data) == 0 {
+			fmt.Println("result 2", err)
 			lastErr = errors.New("secret contains no data")
 			return false, nil
 		}
 
 		for k, v := range result.Data {
+			fmt.Println("result 3", err)
 			if len(v) == 0 {
 				lastErr = fmt.Errorf("%q key has empty value", k)
 				return false, nil
@@ -1252,6 +1255,7 @@ func (c *Client) WaitForSecret(ctx context.Context, s *v1.Secret) (*v1.Secret, e
 
 		return true, nil
 	}); err != nil {
+		fmt.Println("result ", err)
 		if err == wait.ErrWaitTimeout && lastErr != nil {
 			err = lastErr
 		}
