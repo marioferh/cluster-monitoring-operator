@@ -89,7 +89,7 @@ func assertUWMAlertsAccess(t *testing.T) {
 	client := framework.NewPrometheusClient(host, token)
 
 	err = framework.Poll(5*time.Second, time.Minute, func() error {
-		resp, err := client.Do("GET", "/api/v2/rules", nil)
+		resp, err := client.Do("GET", "/api/v2/alerts", nil)
 		if err != nil {
 			return err
 		}
