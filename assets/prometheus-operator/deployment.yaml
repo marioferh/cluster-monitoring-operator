@@ -21,6 +21,8 @@ spec:
       annotations:
         kubectl.kubernetes.io/default-container: prometheus-operator
         target.workload.openshift.io/management: '{"effect": "PreferredDuringScheduling"}'
+        #just an example
+        #"apps/controller": "second-operator"
       labels:
         app.kubernetes.io/component: controller
         app.kubernetes.io/managed-by: cluster-monitoring-operator

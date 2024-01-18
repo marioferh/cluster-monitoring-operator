@@ -85,7 +85,10 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.name
-        image: quay.io/openshift/origin-cluster-monitoring-operator:latest
+        # Define an ID to isolate controllers from each other
+        - name: CONTROLLER_ID
+          value: "second-operator"
+        image: quay.io/mariofer/cluster-monitoring-operator:v2
         name: cluster-monitoring-operator
         ports:
         - containerPort: 8443

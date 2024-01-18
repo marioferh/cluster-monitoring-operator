@@ -57,6 +57,9 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.name
+        # Define an ID to isolate controllers from each other
+        - name: CONTROLLER_ID
+          value: "second-operator"
         image: quay.io/openshift/origin-cluster-monitoring-operator:latest
         name: cluster-monitoring-operator
         ports:
