@@ -45,7 +45,9 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 
+	//clientv1 "github.com/openshift/cluster-monitoring-operator/pkg/generated/informers/externalversions/clustermonitoringoperator/v1/"
 	"github.com/openshift/cluster-monitoring-operator/pkg/alert"
+	cmov1 "github.com/openshift/cluster-monitoring-operator/pkg/apis/cmo/v1"
 	"github.com/openshift/cluster-monitoring-operator/pkg/client"
 	"github.com/openshift/cluster-monitoring-operator/pkg/manifests"
 	"github.com/openshift/cluster-monitoring-operator/pkg/metrics"
@@ -451,6 +453,21 @@ func New(
 	)
 	o.informerFactories = append(o.informerFactories, kubeInformersOperatorNS)
 
+	informer = cache.NewSharedIndexInformer(
+		o.client.CMOListWatchForResource(namespace, "clustermonitoringoperator"),
+		&cmov1.ClusterMonitoringOperator{}, resyncPeriod, cache.Indexers{},
+	)
+
+	_, err = informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		UpdateFunc: func(_, newObj interface{}) {
+			o.handleEvent(newObj)
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	o.informers = append(o.informers, informer)
+
 	configInformers := configv1informers.NewSharedInformerFactory(configClient, 10*time.Minute)
 	missingVersion := "0.0.1-snapshot"
 
@@ -622,6 +639,15 @@ func (o *Operator) keyFunc(obj interface{}) (string, bool) {
 	return k, true
 }
 
+func fromCRtoConfigmap(metaObj metav1.Object) string {
+	fmt.Println("mariofar inside fromCRtoConfigmap")
+	fmt.Println("mariofar ojb ", metaObj.GetAnnotations())
+	a := metaObj.(*cmov1.ClusterMonitoringOperator)
+	fmt.Println("mariofar spec: ", *a.Spec.TelemeterClientConfig.Enabled)
+	newString := "new"
+	return newString
+}
+
 func (o *Operator) handleEvent(obj interface{}) {
 	cmoConfigMap := o.namespace + "/" + o.configMapName
 
@@ -633,7 +659,8 @@ func (o *Operator) handleEvent(obj interface{}) {
 		*configv1.ClusterVersion,
 		// Currently, the CRDs that trigger reconciliation are:
 		// * verticalpodautoscalers.autoscaling.k8s.io
-		*apiextv1.CustomResourceDefinition:
+		*apiextv1.CustomResourceDefinition,
+		*cmov1.ClusterMonitoringOperator:
 		// Log GroupKind and Name of the obj
 		rtObj := obj.(k8sruntime.Object)
 		gk := rtObj.GetObjectKind().GroupVersionKind().GroupKind()
@@ -642,12 +669,16 @@ func (o *Operator) handleEvent(obj interface{}) {
 		if ns := metaObj.GetNamespace(); ns != "" {
 			name = ns + "/" + name
 		}
+		if name == "clustermonitoringoperator" {
+			cmoConfigMap = fromCRtoConfigmap(metaObj)
+		}
 		// NOTE: use %T to print the type if the gv information is absent
 		objKind := gk.String()
 		if objKind == "" {
 			objKind = fmt.Sprintf("%T", obj)
 		}
 		klog.Infof("Triggering an update due to a change in %s/%s", objKind, name)
+		fmt.Println("cmoConfigMap: ", cmoConfigMap)
 		o.enqueue(cmoConfigMap)
 		return
 	}
