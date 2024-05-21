@@ -324,12 +324,12 @@ func (c *Client) ConfigMapListWatchForNamespace(ns string) *cache.ListWatch {
 	return cache.NewListWatchFromClient(c.kclient.CoreV1().RESTClient(), "configmaps", ns, fields.Everything())
 }
 
-func (c *Client) CMOListWatchForResource(namespace, name string) *cache.ListWatch {
+func (c *Client) CMOListWatchForResource(namespace string) *cache.ListWatch {
 	return cache.NewListWatchFromClient(
 		c.cmoclient.CmoV1().RESTClient(),
 		"clustermonitoringoperators",
 		namespace,
-		fields.OneTermEqualSelector("metadata.name", name),
+		fields.Everything(),
 	)
 }
 
