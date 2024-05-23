@@ -1,6 +1,6 @@
 module github.com/openshift/cluster-monitoring-operator
 
-go 1.21
+go 1.22.3
 
 require (
 	github.com/Jeffail/gabs v1.4.0
@@ -26,16 +26,16 @@ require (
 	golang.org/x/text v0.14.0
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.1
-	k8s.io/api v0.29.0
-	k8s.io/apiextensions-apiserver v0.29.0
-	k8s.io/apimachinery v0.29.0
-	k8s.io/apiserver v0.29.0
+	k8s.io/api v0.30.0
+	k8s.io/apiextensions-apiserver v0.30.0
+	k8s.io/apimachinery v0.30.0
+	k8s.io/apiserver v0.30.0
 	k8s.io/autoscaler/vertical-pod-autoscaler v1.0.0
-	k8s.io/client-go v0.29.0
-	k8s.io/code-generator v0.29.0
-	k8s.io/component-base v0.29.0
+	k8s.io/client-go v0.30.0
+	k8s.io/code-generator v0.30.0
+	k8s.io/component-base v0.30.0
 	k8s.io/klog/v2 v2.120.1
-	k8s.io/kube-aggregator v0.29.0
+	k8s.io/kube-aggregator v0.30.0
 	k8s.io/metrics v0.26.1
 	k8s.io/utils v0.0.0-20240310230437-4693a0247e57
 	sigs.k8s.io/yaml v1.4.0
@@ -145,9 +145,8 @@ require (
 	google.golang.org/protobuf v1.33.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
-	k8s.io/gengo v0.0.0-20230829151522-9cce18d56c01 // indirect
 	k8s.io/gengo/v2 v2.0.0-20240228010128-51d4e06bde70 // indirect
-	k8s.io/kms v0.29.0 // indirect
+	k8s.io/kms v0.30.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20240430033511-f0e62f92d13f // indirect
 	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.29.0 // indirect
 	sigs.k8s.io/controller-runtime v0.17.2 // indirect
