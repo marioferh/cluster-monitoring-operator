@@ -37,6 +37,7 @@ import (
 	openshiftoperatorclientset "github.com/openshift/client-go/operator/clientset/versioned"
 	openshiftrouteclientset "github.com/openshift/client-go/route/clientset/versioned"
 	openshiftsecurityclientset "github.com/openshift/client-go/security/clientset/versioned"
+	cmov1 "github.com/openshift/cluster-monitoring-operator/pkg/apis/cmo/v1"
 	"github.com/openshift/library-go/pkg/operator/events"
 	"github.com/openshift/library-go/pkg/operator/resource/resourceapply"
 	monv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
@@ -324,13 +325,8 @@ func (c *Client) ConfigMapListWatchForNamespace(ns string) *cache.ListWatch {
 	return cache.NewListWatchFromClient(c.kclient.CoreV1().RESTClient(), "configmaps", ns, fields.Everything())
 }
 
-func (c *Client) CMOListWatchForResource(namespace string) *cache.ListWatch {
-	return cache.NewListWatchFromClient(
-		c.cmoclient.CmoV1().RESTClient(),
-		"clustermonitoringoperators",
-		namespace,
-		fields.Everything(),
-	)
+func (c *Client) CMOListWatchForResource(ns string) *cache.ListWatch {
+	return cache.NewListWatchFromClient(c.cmoclient.CmoV1().RESTClient(), "clustermonitoringoperators", ns, fields.Everything())
 }
 
 func (c *Client) SecretListWatchForNamespace(ns string) *cache.ListWatch {
@@ -650,6 +646,10 @@ func (c *Client) GetPrometheusRule(ctx context.Context, namespace, name string) 
 
 func (c *Client) GetAlertingRule(ctx context.Context, namespace, name string) (*osmv1.AlertingRule, error) {
 	return c.osmclient.MonitoringV1().AlertingRules(namespace).Get(ctx, name, metav1.GetOptions{})
+}
+
+func (c *Client) GetCMO(ctx context.Context, namespace, name string) (*cmov1.ClusterMonitoringOperator, error) {
+	return c.cmoclient.CmoV1().ClusterMonitoringOperators(namespace).Get(ctx, name, metav1.GetOptions{})
 }
 
 func (c *Client) CreateOrUpdatePrometheus(ctx context.Context, p *monv1.Prometheus) error {

@@ -311,8 +311,7 @@ func New(
 	}
 
 	o.CRInf = cache.NewSharedIndexInformer(
-		o.client.CMOListWatchForResource(namespace),
-		&cmov1.ClusterMonitoringOperator{}, resyncPeriod, cache.Indexers{},
+		o.client.CMOListWatchForResource(namespace), &cmov1.ClusterMonitoringOperator{}, resyncPeriod, cache.Indexers{},
 	)
 
 	_, err = o.CRInf.AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -617,10 +616,10 @@ func (o *Operator) Run(ctx context.Context) error {
 	_, exists, _ := o.cmapInf.GetStore().GetByKey(key)
 
 	//TODO MARIOFER BasedCRDFeatureGateEnabled
-	key2 := o.namespace + "/" + customResourceName
-	obj2, exists2, _ := o.CRInf.GetStore().GetByKey(key2)
-	CRDconfig := obj2.(*cmov1.ClusterMonitoringOperator)
-	fmt.Println("mariofir obj", CRDconfig, exists2)
+	//key2 := o.namespace + "/" + customResourceName
+	//obj2, exists2, _ := o.CRInf.GetStore().GetByKey(key2)
+	//CRDconfig := obj2.(*cmov1.ClusterMonitoringOperator)
+	//fmt.Println("mariofir obj", CRDconfig, exists2)
 
 	// TODO MARIOFER
 	if !exists {
@@ -651,15 +650,6 @@ func (o *Operator) keyFunc(obj interface{}) (string, bool) {
 	return k, true
 }
 
-func fromCRtoConfigmap(ns string, metaObj metav1.Object) string {
-	fmt.Println("mariofar inside fromCRtoConfigmap")
-	fmt.Println("mariofar ojb ", metaObj.GetAnnotations())
-	a := metaObj.(*cmov1.ClusterMonitoringOperator)
-	fmt.Println("mariofar spec: ", a.Spec)
-	newString := ns + "/" + customResourceName
-	return newString
-}
-
 func (o *Operator) handleEvent(obj interface{}) {
 	// TODO MARIOFER
 	cmoConfigMap := o.namespace + "/" + o.configMapName
@@ -686,9 +676,6 @@ func (o *Operator) handleEvent(obj interface{}) {
 		objKind := gk.String()
 		if objKind == "" {
 			objKind = fmt.Sprintf("%T", obj)
-		}
-		if objKind == "*v1.ClusterMonitoringOperator" {
-			cmoConfigMap = fromCRtoConfigmap(o.namespace, metaObj)
 		}
 		klog.Infof("Triggering an update due to a change in %s/%s", objKind, name)
 		o.enqueue(cmoConfigMap)
@@ -774,6 +761,20 @@ func (o *Operator) enqueue(obj interface{}) {
 
 type proxyConfigSupplier func(context.Context) (*ProxyConfig, error)
 
+func getProxyReaderCR(ctx context.Context, config *cmov1.ClusterMonitoringOperator, proxyConfigSupplier proxyConfigSupplier) manifests.ProxyReader {
+	if config.HTTPProxy() != "" || config.HTTPSProxy() != "" || config.NoProxy() != "" {
+		return config
+	}
+
+	clusterProxyConfig, err := proxyConfigSupplier(ctx)
+	if err != nil {
+		klog.Warningf("Proxy config in CMO CR is empty and fallback to cluster proxy config failed - no proxy will be used: %v", err)
+		return config
+	}
+
+	return clusterProxyConfig
+}
+
 func getProxyReader(ctx context.Context, config *manifests.Config, proxyConfigSupplier proxyConfigSupplier) manifests.ProxyReader {
 	if config.HTTPProxy() != "" || config.HTTPSProxy() != "" || config.NoProxy() != "" {
 		return config
@@ -797,7 +798,155 @@ func newUWMTaskSpec(targetName string, task tasks.Task) *tasks.TaskSpec {
 }
 
 func (o *Operator) sync(ctx context.Context, key string) error {
-	fmt.Println("mariofar sync", key)
+	fmt.Println("mariofar sync")
+	crKey := fmt.Sprintf("%s/%s", o.namespace, o.configMapName)
+	cmoCR, err := o.client.GetCMO(ctx, o.namespace, customResourceName)
+	if err != nil {
+		klog.Warningf("mariofar cmoCR %q  not found. Using defaults.", crKey)
+	}
+	cmKey := fmt.Sprintf("%s/%s", o.namespace, o.configMapName)
+	cmoConfigmap, err := o.client.GetConfigmap(ctx, o.namespace, o.configMapName)
+	if err != nil {
+		klog.Warningf("mariofar Monitoring %q ConfigMap not found. Using defaults.", cmKey)
+	}
+
+	featureGate := true
+	if featureGate {
+		fmt.Println("mariofar sync cmoCR", cmoCR)
+
+		err := o.syncCR(ctx, key)
+		if err != nil {
+			return err
+		}
+	} else if cmoConfigmap.Name == o.configMapName {
+		err := o.syncConfigmap(ctx, key)
+		if err != nil {
+			return err
+		}
+	}
+	return err
+}
+
+func (o *Operator) syncCR(ctx context.Context, key string) error {
+	c, err := o.loadConfigCR(key)
+	if err != nil {
+		o.reportFailed(ctx, newRunReportForError("InvalidConfiguration", err))
+		return err
+	}
+	c.SetImages(o.images)
+	c.SetTelemetryMatches(o.telemetryMatches)
+	c.SetRemoteWrite(o.remoteWrite)
+
+	var proxyConfig = getProxyReaderCR(ctx, c, o.loadProxyConfig)
+
+	var apiServerConfig *manifests.APIServerConfig
+	apiServerConfig, err = o.loadApiServerConfig(ctx)
+
+	if err != nil {
+		o.reportFailed(ctx, newRunReportForError("APIServerConfigError", err))
+		return err
+	}
+
+	consoleConfig, err := o.loadConsoleConfig(ctx)
+	if err != nil {
+		klog.Warningf("Fail to load ConsoleConfig, AlertManager's externalURL may be outdated")
+	}
+
+	// Enable kube-state-metrics' custom-resource-state-based metrics if VPA CRD is installed within the cluster.
+	o.lastKnownVPACustomResourceDefinitionPresent, err = o.client.VPACustomResourceDefinitionPresent(ctx, o.lastKnownVPACustomResourceDefinitionPresent)
+	if err != nil {
+		// Throw on all transient errors.
+		return fmt.Errorf("unable to guess the desired state for kube-state-metrics' custom-resource-state metrics enablement: %w", err)
+	} else {
+		// If we didn't get an error, we can safely assume that the CRD is deterministically either present or absent.
+		if *o.lastKnownVPACustomResourceDefinitionPresent {
+			klog.Infof("%s CRD found, enabling kube-state-metrics' custom-resource-state-based metrics", client.VerticalPodAutoscalerCRDMetadataName)
+		}
+	}
+
+	pc := &c
+
+	factory := manifests.NewFactory(
+		o.namespace,
+		o.namespaceUserWorkload,
+		(manifests.Config)(pc),
+		o.loadInfrastructureConfig(ctx),
+		proxyConfig,
+		o.assets,
+		apiServerConfig,
+		consoleConfig,
+	)
+
+}
+
+func (o *Operator) loadConfigCR(key string) (*cmov1.ClusterMonitoringOperator, error) {
+	obj, found, err := o.CRInf.GetStore().GetByKey(key)
+	if err != nil {
+		return nil, fmt.Errorf("an error occurred when retrieving the Cluster Monitoring CR: %w", err)
+	}
+
+	if !found {
+		klog.Warning("No Cluster Monitoring ConfigMap was found. Using defaults.")
+		return cmov1.NewDefaultConfig(), nil
+	}
+
+	cmo := obj.(*cmov1.ClusterMonitoringOperator)
+	cmo = cmo.DeepCopy()
+
+	return cmo, nil
+}
+
+func (o *Operator) Config(ctx context.Context, key string) (*manifests.Config, error) {
+	fmt.Println("mariofar config entra?")
+	c, err := o.loadConfig(key)
+	if err != nil {
+		return nil, err
+	}
+	err = c.Precheck()
+	if err != nil {
+		return nil, err
+	}
+
+	// Only use User Workload Monitoring ConfigMap from user ns and populate if
+	// it's enabled by admin via Cluster Monitoring ConfigMap.  The above
+	// loadConfig() already initializes the structs with nil values for
+	// UserWorkloadConfiguration struct.
+	if *c.ClusterMonitoringConfiguration.UserWorkloadEnabled {
+		c.UserWorkloadConfiguration, err = o.loadUserWorkloadConfig(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	o.userWorkloadEnabled = *c.ClusterMonitoringConfiguration.UserWorkloadEnabled
+
+	err = c.LoadEnforcedBodySizeLimit(o.client, ctx)
+	if err != nil {
+		c.ClusterMonitoringConfiguration.PrometheusK8sConfig.EnforcedBodySizeLimit = ""
+		klog.Warningf("Error loading enforced body size limit, no body size limit will be enforced: %v", err)
+	}
+
+	// Only fetch the token and cluster ID if they have not been specified in the config.
+	if c.ClusterMonitoringConfiguration.TelemeterClientConfig.ClusterID == "" || c.ClusterMonitoringConfiguration.TelemeterClientConfig.Token == "" {
+		err := c.LoadClusterID(func() (*configv1.ClusterVersion, error) {
+			return o.client.GetClusterVersion(ctx, "version")
+		})
+
+		if err != nil {
+			klog.Warningf("Could not fetch cluster version from API. Proceeding without it: %v", err)
+		}
+
+		err = c.LoadToken(func() (*v1.Secret, error) {
+			return o.client.KubernetesInterface().CoreV1().Secrets("openshift-config").Get(ctx, "pull-secret", metav1.GetOptions{})
+		})
+
+		if err != nil {
+			klog.Warningf("Error loading token from API. Proceeding without it: %v", err)
+		}
+	}
+	return c, nil
+}
+
+func (o *Operator) syncConfigmap(ctx context.Context, key string) error {
 	config, err := o.Config(ctx, key)
 	if err != nil {
 		o.reportFailed(ctx, newRunReportForError("InvalidConfiguration", err))
@@ -1032,79 +1181,27 @@ func (o *Operator) loadUserWorkloadConfig(ctx context.Context) (*manifests.UserW
 	return uwc, nil
 }
 
-func castCRtoConfigmap(cParsed *manifests.Config, crmap *cmov1.ClusterMonitoringOperator) {
-	cParsed.ClusterMonitoringConfiguration.AlertmanagerMainConfig = (*manifests.AlertmanagerMainConfig)(crmap.Spec.AlertmanagerMainConfig)
-	cParsed.ClusterMonitoringConfiguration.UserWorkloadEnabled = crmap.Spec.UserWorkloadEnabled
-	cParsed.ClusterMonitoringConfiguration.HTTPConfig = (*manifests.HTTPConfig)(crmap.Spec.HTTPConfig)
-	cParsed.ClusterMonitoringConfiguration.K8sPrometheusAdapter = (*manifests.K8sPrometheusAdapter)(crmap.Spec.K8sPrometheusAdapter)
-	cParsed.ClusterMonitoringConfiguration.MetricsServerConfig = (*manifests.MetricsServerConfig)(crmap.Spec.MetricsServerConfig.Resources)
-	cParsed.ClusterMonitoringConfiguration.KubeStateMetricsConfig = (*manifests.KubeStateMetricsConfig)(crmap.Spec.KubeStateMetricsConfig)
-	cParsed.ClusterMonitoringConfiguration.PrometheusK8sConfig = (*manifests.PrometheusK8sConfig)(crmap.Spec.PrometheusK8sConfig)
-	cParsed.ClusterMonitoringConfiguration.PrometheusOperatorAdmissionWebhookConfig = (*manifests.PrometheusOperatorAdmissionWebhookConfig)(crmap.Spec.PrometheusOperatorAdmissionWebhookConfig)
-	cParsed.ClusterMonitoringConfiguration.OpenShiftMetricsConfig = (*manifests.OpenShiftMetricsConfig)(crmap.Spec.OpenShiftMetricsConfig)
-	cParsed.ClusterMonitoringConfiguration.TelemeterClientConfig = (*manifests.TelemeterClientConfig)(crmap.Spec.TelemeterClientConfig)
-	cParsed.ClusterMonitoringConfiguration.ThanosQuerierConfig = (*manifests.ThanosQuerierConfig)(crmap.Spec.ThanosQuerierConfig)
-	cParsed.ClusterMonitoringConfiguration.NodeExporterConfig = (manifests.NodeExporterConfig)(crmap.Spec.NodeExporterConfig)
-	cParsed.ClusterMonitoringConfiguration.MonitoringPluginConfig = (*manifests.MonitoringPluginConfig)(crmap.Spec.MonitoringPluginConfig)
-}
-
-/*
-// Conversion function
-func converCRtoConfigmap(spec *cmov1.ClusterMonitoringOperatorSpec) manifests.ClusterMonitoringConfiguration {
-	return manifests.ClusterMonitoringConfiguration{
-		AlertmanagerMainConfig:                   spec.AlertmanagerMainConfig,
-		UserWorkloadEnabled:                      spec.UserWorkloadEnabled,
-		HTTPConfig:                               spec.HTTPConfig,
-		K8sPrometheusAdapter:                     spec.K8sPrometheusAdapter,
-		MetricsServerConfig:                      spec.MetricsServerConfig,
-		KubeStateMetricsConfig:                   spec.KubeStateMetricsConfig,
-		PrometheusK8sConfig:                      spec.PrometheusK8sConfig,
-		PrometheusOperatorConfig:                 spec.PrometheusOperatorConfig,
-		PrometheusOperatorAdmissionWebhookConfig: spec.PrometheusOperatorAdmissionWebhookConfig,
-		OpenShiftMetricsConfig:                   spec.OpenShiftMetricsConfig,
-		TelemeterClientConfig:                    spec.TelemeterClientConfig,
-		ThanosQuerierConfig:                      spec.ThanosQuerierConfig,
-		NodeExporterConfig:                       &spec.NodeExporterConfig,
-		MonitoringPluginConfig:                   spec.MonitoringPluginConfig,
-	}
-}*/
-
 func (o *Operator) loadConfig(key string) (*manifests.Config, error) {
-	fmt.Println("mariofar load config", key)
-	obj, found, err := o.CRInf.GetStore().GetByKey(key)
+	obj, found, err := o.cmapInf.GetStore().GetByKey(key)
 	if err != nil {
-		return nil, fmt.Errorf("an error occurred when retrieving the Cluster Monitoring ConfigMap or CR: %w", err)
+		return nil, fmt.Errorf("an error occurred when retrieving the Cluster Monitoring ConfigMap: %w", err)
 	}
 
 	if !found {
-		klog.Warning("No Cluster Monitoring ConfigMap or CR was found. Using defaults.")
+		klog.Warning("No Cluster Monitoring ConfigMap was found. Using defaults.")
 		return manifests.NewDefaultConfig(), nil
 	}
 
-	var cParsed *manifests.Config
-	fmt.Println("mariofar swtich", obj)
-	switch objkind := obj.(type) {
-	case *v1.ConfigMap:
-		fmt.Println("mariofar type configmap")
-		cmap := obj.(*v1.ConfigMap)
-		configContent, found := cmap.Data["config.yaml"]
+	cmap := obj.(*v1.ConfigMap)
+	configContent, found := cmap.Data["config.yaml"]
 
-		if !found {
-			return nil, errors.New("the Cluster Monitoring ConfigMap doesn't contain a 'config.yaml' key")
-		}
+	if !found {
+		return nil, errors.New("the Cluster Monitoring ConfigMap doesn't contain a 'config.yaml' key")
+	}
 
-		cParsed, err = manifests.NewConfigFromString(configContent, o.collectionProfilesEnabled)
-		if err != nil {
-			return nil, fmt.Errorf("the Cluster Monitoring ConfigMap could not be parsed: %w", err)
-		}
-
-	case *cmov1.ClusterMonitoringOperator:
-		fmt.Println("mariofar type cmo")
-		crmap := obj.(*cmov1.ClusterMonitoringOperator)
-		fmt.Println("mariofar falla", *crmap.Spec.TelemeterClientConfig.Enabled)
-		castCRtoConfigmap(cParsed, crmap)
-	default:
-		fmt.Printf("Unknown type: %T\n", objkind)
+	cParsed, err := manifests.NewConfigFromString(configContent, o.collectionProfilesEnabled)
+	if err != nil {
+		return nil, fmt.Errorf("the Cluster Monitoring ConfigMap could not be parsed: %w", err)
 	}
 
 	return cParsed, nil

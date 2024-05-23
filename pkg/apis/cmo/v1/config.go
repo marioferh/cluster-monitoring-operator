@@ -18,39 +18,189 @@ import (
 	auditv1 "k8s.io/apiserver/pkg/apis/audit/v1"
 )
 
-type Config struct {
-	Images                               *Images `json:"-"`
-	RemoteWrite                          bool    `json:"-"`
-	CollectionProfilesFeatureGateEnabled bool    `json:"-"`
-	BasedCRDFeatureGateEnabled           bool    `json:"-"`
+const (
+	DefaultRetentionValue = "15d"
 
-	ClusterMonitoringConfiguration *ClusterMonitoringOperatorSpec `json:"-"`
-	UserWorkloadConfiguration      *UserWorkloadConfiguration     `json:"-"`
+	// Limit the body size from scrape queries
+	// Assumptions: one node has in average 110 pods, each pod exposes 400 metrics, each metric is expressed by on average 250 bytes.
+	// 1.5x the size for a safe margin,
+	// minimal HA requires 3 nodes. it rounds to 47.2 MB (49,500,000 Bytes).
+	minimalSizeLimit = 3 * 1.5 * 110 * 400 * 250
+
+	// A value of Prometheusk8s.enforceBodySizeLimit,
+	// meaning the limit will be automatically calculated based on cluster capacity.
+	automaticBodySizeLimit = "automatic"
+)
+
+func NewDefaultConfig() *ClusterMonitoringOperator {
+	c := &ClusterMonitoringOperator{}
+	cmc := defaultClusterMonitoringConfiguration()
+	c.Spec = cmc
+	//c.UserWorkloadConfiguration = NewDefaultUserWorkloadMonitoringConfig()
+	c.applyDefaults()
+	return c
 }
 
-type Images struct {
-	K8sPrometheusAdapter               string
-	MetricsServer                      string
-	PromLabelProxy                     string
-	PrometheusOperatorAdmissionWebhook string
-	PrometheusOperator                 string
-	PrometheusConfigReloader           string
-	Prometheus                         string
-	Alertmanager                       string
-	NodeExporter                       string
-	KubeStateMetrics                   string
-	OpenShiftStateMetrics              string
-	KubeRbacProxy                      string
-	TelemeterClient                    string
-	Thanos                             string
-	MonitoringPlugin                   string
+/*
+func (u *UserWorkloadConfiguration) applyDefaults() {
+	if u.PrometheusOperator == nil {
+		u.PrometheusOperator = &PrometheusOperatorConfig{}
+	}
+	if u.Prometheus == nil {
+		u.Prometheus = &PrometheusRestrictedConfig{}
+	}
+	if u.ThanosRuler == nil {
+		u.ThanosRuler = &ThanosRulerConfig{}
+	}
+	if u.Alertmanager == nil {
+		u.Alertmanager = &AlertmanagerUserWorkloadConfig{}
+	}
+}*/
+
+func defaultClusterMonitoringConfiguration() ClusterMonitoringOperatorSpec {
+	return ClusterMonitoringOperatorSpec{
+		NodeExporterConfig: NodeExporterConfig{
+			Collectors: NodeExporterCollectorConfig{
+				NetDev: NodeExporterCollectorNetDevConfig{
+					Enabled: true,
+				},
+				NetClass: NodeExporterCollectorNetClassConfig{
+					Enabled:    true,
+					UseNetlink: true,
+				},
+				Systemd: NodeExporterCollectorSystemdConfig{
+					Enabled: false,
+				},
+			},
+		},
+	}
 }
 
-type HTTPConfig struct {
-	HTTPProxy  string `json:"httpProxy"`
-	HTTPSProxy string `json:"httpsProxy"`
-	NoProxy    string `json:"noProxy"`
+func (c *ClusterMonitoringOperator) applyDefaults() {
+	if c.Images == nil {
+		c.Images = &Images{}
+	}
+	if c.Spec.PrometheusOperatorConfig == nil {
+		c.Spec.PrometheusOperatorConfig = &PrometheusOperatorConfig{}
+	}
+	if c.Spec.PrometheusOperatorAdmissionWebhookConfig == nil {
+		c.Spec.PrometheusOperatorAdmissionWebhookConfig = &PrometheusOperatorAdmissionWebhookConfig{}
+	}
+	if c.Spec.PrometheusK8sConfig == nil {
+		c.Spec.PrometheusK8sConfig = &PrometheusK8sConfig{}
+	}
+	if c.Spec.PrometheusK8sConfig.Retention == "" && c.Spec.PrometheusK8sConfig.RetentionSize == "" {
+		c.Spec.PrometheusK8sConfig.Retention = DefaultRetentionValue
+	}
+	if c.Spec.AlertmanagerMainConfig == nil {
+		c.Spec.AlertmanagerMainConfig = &AlertmanagerMainConfig{}
+	}
+	if c.Spec.UserWorkloadEnabled == nil {
+		disable := false
+		c.Spec.UserWorkloadEnabled = &disable
+	}
+	if c.Spec.ThanosQuerierConfig == nil {
+		c.Spec.ThanosQuerierConfig = &ThanosQuerierConfig{}
+	}
+	if c.Spec.KubeStateMetricsConfig == nil {
+		c.Spec.KubeStateMetricsConfig = &KubeStateMetricsConfig{}
+	}
+	if c.Spec.OpenShiftMetricsConfig == nil {
+		c.Spec.OpenShiftMetricsConfig = &OpenShiftStateMetricsConfig{}
+	}
+	if c.Spec.HTTPConfig == nil {
+		c.Spec.HTTPConfig = &HTTPConfig{}
+	}
+	if c.Spec.TelemeterClientConfig == nil {
+		c.Spec.TelemeterClientConfig = &TelemeterClientConfig{
+			TelemeterServerURL: "https://infogw.api.openshift.com/",
+		}
+	}
+
+	if c.Spec.MetricsServerConfig == nil {
+		c.Spec.MetricsServerConfig = &MetricsServerConfig{}
+	}
+	if c.Spec.MetricsServerConfig.Audit == nil {
+		c.Spec.MetricsServerConfig.Audit = &Audit{}
+	}
+	if c.Spec.MetricsServerConfig.Audit.Profile == "" {
+		c.Spec.MetricsServerConfig.Audit.Profile = auditv1.LevelMetadata
+	}
+
+	if c.Spec.K8sPrometheusAdapter == nil {
+		c.Spec.K8sPrometheusAdapter = &K8sPrometheusAdapter{}
+	}
+	if c.Spec.K8sPrometheusAdapter.Audit == nil {
+		c.Spec.K8sPrometheusAdapter.Audit = &Audit{}
+	}
+	if c.Spec.K8sPrometheusAdapter.Audit.Profile == "" {
+		c.Spec.K8sPrometheusAdapter.Audit.Profile = auditv1.LevelMetadata
+	}
+
+	if c.Spec.PrometheusK8sConfig.CollectionProfile == "" {
+		c.Spec.PrometheusK8sConfig.CollectionProfile = FullCollectionProfile
+	}
+
+	// `defaultExcludedDevices` is the default for two arguments: `collector.netclass.ignored-devices` and `--collector.netdev.device-exclude`.
+	// The following virtual NICs are ignored by default:
+	// * `veth` network interface associated with containers.
+	// * OVN renames `veth.*` to `<rand-hex>@if<X>` where `X` is `/sys/class/net/<if>/ifindex`
+	// thus `[a-f0-9]{15}`
+	// * `enP.*` virtual NICs on Azure cluster
+	// * OVN virtual interfaces `ovn-k8s-mp[0-9]*`
+	// * virtual tunnels and bridges: `tun[0-9]*|br[0-9]*|br-ex|br-int|br-ext`
+	// * Calico Virtual NICs `cali[a-f0-9]*`
+	// Refer to:
+	// https://issues.redhat.com/browse/OCPBUGS-1321
+	// https://issues.redhat.com/browse/OCPBUGS-2729
+	// https://issues.redhat.com/browse/OCPBUGS-7282
+	defaultExcludedDevices := []string{
+		"veth.*",
+		"[a-f0-9]{15}",
+		"enP.*",
+		"ovn-k8s-mp[0-9]*",
+		"br-ex",
+		"br-int",
+		"br-ext",
+		"br[0-9]*",
+		"tun[0-9]*",
+		"cali[a-f0-9]*",
+	}
+	if c.Spec.NodeExporterConfig.IgnoredNetworkDevices == nil {
+		c.Spec.NodeExporterConfig.IgnoredNetworkDevices = &defaultExcludedDevices
+	}
 }
+
+/*
+
+func (c ClusterMonitoringOperator) IsStorageConfigured() bool {
+	if c.Spec == nil {
+		return false
+	}
+
+	prometheusK8sConfig := c.Spec.PrometheusK8sConfig
+	if prometheusK8sConfig == nil {
+		return false
+	}
+
+	return prometheusK8sConfig.VolumeClaimTemplate != nil
+}
+
+func (c ClusterMonitoringOperator) HasInconsistentAlertmanagerConfigurations() bool {
+	if c.Spec == nil || c.UserWorkloadConfiguration == nil {
+		return false
+	}
+
+	amConfig := c.Spec.AlertmanagerMainConfig
+	uwmConfig := c.UserWorkloadConfiguration.Alertmanager
+
+	if amConfig == nil || uwmConfig == nil {
+		return false
+	}
+
+	return amConfig.EnableUserAlertManagerConfig && uwmConfig.Enabled
+}
+
 
 func (a AlertmanagerMainConfig) IsEnabled() bool {
 	return a.Enabled == nil || *a.Enabled
@@ -67,3 +217,259 @@ type Audit struct {
 	// for more information about auditing and log levels.
 	Profile auditv1.Level `json:"profile"`
 }
+
+func (cfg *TelemeterClientConfig) IsEnabled() bool {
+	if cfg == nil {
+		return false
+	}
+
+	if (cfg.Enabled != nil && !*cfg.Enabled) ||
+		cfg.ClusterID == "" ||
+		cfg.Token == "" {
+		return false
+	}
+
+	return true
+}
+
+func (cps CollectionProfiles) String() string {
+	var sb strings.Builder
+	for i := 0; i < len(cps)-1; i++ {
+		sb.WriteString(string(cps[i]))
+		sb.WriteString(", ")
+	}
+	sb.WriteString(string(cps[len(cps)-1]))
+	return sb.String()
+}
+
+func NewConfig(content io.Reader, collectionProfilesFeatureGateEnabled bool) (*Config, error) {
+	c := Config{CollectionProfilesFeatureGateEnabled: collectionProfilesFeatureGateEnabled}
+	cmc := defaultClusterMonitoringConfiguration()
+	err := k8syaml.NewYAMLOrJSONDecoder(content, 4096).Decode(&cmc)
+	if err != nil {
+		return nil, err
+	}
+	c.Spec = &cmc
+	c.applyDefaults()
+	c.UserWorkloadConfiguration = NewDefaultUserWorkloadMonitoringConfig()
+
+	return &c, nil
+}
+*/
+
+func (c *ClusterMonitoringOperator) SetImages(images map[string]string) {
+	c.Images.PrometheusOperatorAdmissionWebhook = images["prometheus-operator-admission-webhook"]
+	c.Images.PrometheusOperator = images["prometheus-operator"]
+	c.Images.PrometheusConfigReloader = images["prometheus-config-reloader"]
+	c.Images.Prometheus = images["prometheus"]
+	c.Images.Alertmanager = images["alertmanager"]
+	c.Images.NodeExporter = images["node-exporter"]
+	c.Images.KubeStateMetrics = images["kube-state-metrics"]
+	c.Images.KubeRbacProxy = images["kube-rbac-proxy"]
+	c.Images.TelemeterClient = images["telemeter-client"]
+	c.Images.PromLabelProxy = images["prom-label-proxy"]
+	c.Images.K8sPrometheusAdapter = images["k8s-prometheus-adapter"]
+	c.Images.MetricsServer = images["kube-metrics-server"]
+	c.Images.OpenShiftStateMetrics = images["openshift-state-metrics"]
+	c.Images.Thanos = images["thanos"]
+	c.Images.MonitoringPlugin = images["monitoring-plugin"]
+}
+
+func (c *ClusterMonitoringOperator) SetTelemetryMatches(matches []string) {
+	c.Spec.PrometheusK8sConfig.TelemetryMatches = matches
+}
+
+func (c *ClusterMonitoringOperator) SetRemoteWrite(rw bool) {
+	c.RemoteWrite = rw
+	if c.RemoteWrite && c.Spec.TelemeterClientConfig.TelemeterServerURL == "https://infogw.api.openshift.com/" {
+		c.Spec.TelemeterClientConfig.TelemeterServerURL = "https://infogw.api.openshift.com/metrics/v1/receive"
+	}
+}
+
+
+func (c *ClusterMonitoringOperator) LoadClusterID(load func() (*configv1.ClusterVersion, error)) error {
+	if c.Spec.TelemeterClientConfig.ClusterID != "" {
+		return nil
+	}
+
+	cv, err := load()
+	if err != nil {
+		return fmt.Errorf("error loading cluster version: %w", err)
+	}
+
+	c.Spec.TelemeterClientConfig.ClusterID = string(cv.Spec.ClusterID)
+	return nil
+}
+
+func (c *ClusterMonitoringOperator) LoadToken(load func() (*v1.Secret, error)) error {
+	if c.Spec.TelemeterClientConfig.Token != "" {
+		return nil
+	}
+
+	secret, err := load()
+	if err != nil {
+		return fmt.Errorf("error loading secret: %w", err)
+	}
+
+	if secret.Type != v1.SecretTypeDockerConfigJson {
+		return fmt.Errorf("error expecting secret type %s got %s", v1.SecretTypeDockerConfigJson, secret.Type)
+	}
+
+	ps := struct {
+		Auths struct {
+			COC struct {
+				Auth string `json:"auth"`
+			} `json:"cloud.openshift.com"`
+		} `json:"auths"`
+	}{}
+
+	if err := json.Unmarshal(secret.Data[v1.DockerConfigJsonKey], &ps); err != nil {
+		return fmt.Errorf("unmarshaling pull secret failed: %w", err)
+	}
+
+	c.Spec.TelemeterClientConfig.Token = ps.Auths.COC.Auth
+	return nil
+}
+
+// HTTPProxy implements the ProxyReader interface.
+func (c *ClusterMonitoringOperator) HTTPProxy() string {
+	return c.Spec.HTTPConfig.HTTPProxy
+}
+
+// HTTPSProxy implements the ProxyReader interface.
+func (c *ClusterMonitoringOperator) HTTPSProxy() string {
+	return c.Spec.HTTPConfig.HTTPSProxy
+}
+
+// NoProxy implements the ProxyReader interface.
+func (c *ClusterMonitoringOperator) NoProxy() string {
+	return c.Spec.HTTPConfig.NoProxy
+}
+
+// PodCapacityReader returns the maximum number of pods that can be scheduled in a cluster.
+type PodCapacityReader interface {
+	PodCapacity(context.Context) (int, error)
+}
+
+func (c *ClusterMonitoringOperator) LoadEnforcedBodySizeLimit(pcr PodCapacityReader, ctx context.Context) error {
+	if c.Spec.PrometheusK8sConfig.EnforcedBodySizeLimit == "" {
+		return nil
+	}
+
+	if c.Spec.PrometheusK8sConfig.EnforcedBodySizeLimit == automaticBodySizeLimit {
+		podCapacity, err := pcr.PodCapacity(ctx)
+		if err != nil {
+			return fmt.Errorf("error fetching pod capacity: %w", err)
+		}
+		c.Spec.PrometheusK8sConfig.EnforcedBodySizeLimit = calculateBodySizeLimit(podCapacity)
+		return nil
+	}
+
+	// To validate if given value is parsable for the acceptable size values
+	if _, err := units.ParseBase2Bytes(c.Spec.PrometheusK8sConfig.EnforcedBodySizeLimit); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *ClusterMonitoringOperator) Precheck() error {
+	if c.Spec.PrometheusK8sConfig.CollectionProfile != FullCollectionProfile && !c.CollectionProfilesFeatureGateEnabled {
+		return fmt.Errorf("%w: collectionProfiles is currently a TechPreview feature behind the \"MetricsCollectionProfiles\" feature-gate, to be able to use a profile different from the default (\"full\") please enable it first", ErrConfigValidation)
+	}
+
+	// Validate the configured collection profile iff tech preview is enabled, even if the default profile is set.
+	if c.CollectionProfilesFeatureGateEnabled {
+		for _, profile := range SupportedCollectionProfiles {
+			var v float64
+			if profile == c.Spec.PrometheusK8sConfig.CollectionProfile {
+				v = 1
+			}
+			metrics.CollectionProfile.WithLabelValues(string(profile)).Set(v)
+		}
+		if !slices.Contains(SupportedCollectionProfiles, c.Spec.PrometheusK8sConfig.CollectionProfile) {
+			return fmt.Errorf(`%q is not supported, supported collection profiles are: %q: %w`, c.Spec.PrometheusK8sConfig.CollectionProfile, SupportedCollectionProfiles.String(), ErrConfigValidation)
+		}
+	}
+
+	// Highlight deprecated config fields.
+	var d float64
+	if c.Spec.K8sPrometheusAdapter.DedicatedServiceMonitors != nil {
+		d = 1
+	}
+	// Deprecated in https://github.com/openshift/cluster-monitoring-operator/pull/2160
+	metrics.DeprecatedConfig.WithLabelValues("openshift-monitoring/cluster-monitoring-config", "k8sPrometheusAdapter.dedicatedServiceMonitors", "4.15").Set(d)
+	return nil
+}
+
+func calculateBodySizeLimit(podCapacity int) string {
+	const samplesPerPod = 400 // 400 samples per pod
+	const sizePerSample = 200 // 200 Bytes
+
+	bodySize := podCapacity * samplesPerPod * sizePerSample
+	if bodySize < minimalSizeLimit {
+		klog.Infof("Calculated scrape body size limit %v is too small, using default value %v instead", bodySize, minimalSizeLimit)
+		bodySize = minimalSizeLimit
+	}
+
+	return fmt.Sprintf("%dMB", int(math.Ceil(float64(bodySize)/(1024*1024))))
+}
+
+// NewConfigFromString transforms a string containing configuration in the
+// openshift-monitoring/cluster-monitoring-configuration format into a data
+// structure that facilitates programmatical checks of that configuration. The
+// content of the data structure might change if TechPreview is enabled (tp), as
+// some features are only meant for TechPreview.
+func NewConfigFromString(content string, collectionProfilesFeatureGateEnabled bool) (*Config, error) {
+	if content == "" {
+		return NewDefaultConfig(), nil
+	}
+
+	return NewConfig(bytes.NewBuffer([]byte(content)), collectionProfilesFeatureGateEnabled)
+}
+
+func NewDefaultConfig() *Config {
+	c := &Config{}
+	cmc := defaultClusterMonitoringConfiguration()
+	c.Spec = &cmc
+	c.UserWorkloadConfiguration = NewDefaultUserWorkloadMonitoringConfig()
+	c.applyDefaults()
+	return c
+}
+
+func (u *UserWorkloadConfiguration) applyDefaults() {
+	if u.PrometheusOperator == nil {
+		u.PrometheusOperator = &PrometheusOperatorConfig{}
+	}
+	if u.Prometheus == nil {
+		u.Prometheus = &PrometheusRestrictedConfig{}
+	}
+	if u.ThanosRuler == nil {
+		u.ThanosRuler = &ThanosRulerConfig{}
+	}
+	if u.Alertmanager == nil {
+		u.Alertmanager = &AlertmanagerUserWorkloadConfig{}
+	}
+}
+
+func NewUserConfigFromString(content string) (*UserWorkloadConfiguration, error) {
+	if content == "" {
+		return NewDefaultUserWorkloadMonitoringConfig(), nil
+	}
+	u := &UserWorkloadConfiguration{}
+	err := k8syaml.NewYAMLOrJSONDecoder(bytes.NewBuffer([]byte(content)), 100).Decode(&u)
+	if err != nil {
+		return nil, err
+	}
+
+	u.applyDefaults()
+
+	return u, nil
+}
+
+func NewDefaultUserWorkloadMonitoringConfig() *UserWorkloadConfiguration {
+	u := &UserWorkloadConfiguration{}
+	u.applyDefaults()
+	return u
+}
+*/

@@ -5,7 +5,7 @@ metadata:
   namespace: openshift-monitoring
 spec:
   telemeterClient:
-    enabled: true
+    enabled: false 
     nodeSelector:
       kubernetes.io/os: linux
     tolerations:

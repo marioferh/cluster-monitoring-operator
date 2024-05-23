@@ -20,10 +20,16 @@ import (
 	monv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	auditv1 "k8s.io/apiserver/pkg/apis/audit/v1"
 )
 
 type CollectionProfile string
 type CollectionProfiles []CollectionProfile
+
+const (
+	FullCollectionProfile    = "full"
+	MinimalCollectionProfile = "minimal"
+)
 
 const (
 	CMOKind    = "ClusterMonitoringOperator"
@@ -816,6 +822,11 @@ type ClusterMonitoringOperator struct {
 
 	Spec   ClusterMonitoringOperatorSpec   `json:"spec,omitempty"`
 	Status ClusterMonitoringOperatorStatus `json:"status,omitempty"`
+
+	Images                               *Images `json:"-"`
+	RemoteWrite                          bool    `json:"-"`
+	CollectionProfilesFeatureGateEnabled bool    `json:"-"`
+	BasedCRDFeatureGateEnabled           bool    `json:"-"`
 }
 
 //+kubebuilder:object:root=true
@@ -825,4 +836,44 @@ type ClusterMonitoringOperatorList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []ClusterMonitoringOperator `json:"items"`
+}
+
+type HTTPConfig struct {
+	HTTPProxy  string `json:"httpProxy"`
+	HTTPSProxy string `json:"httpsProxy"`
+	NoProxy    string `json:"noProxy"`
+}
+
+func (a AlertmanagerMainConfig) IsEnabled() bool {
+	return a.Enabled == nil || *a.Enabled
+}
+
+// Audit profile configurations
+type Audit struct {
+
+	// The Profile to set for audit logs. This currently matches the various
+	// audit log levels such as: "metadata, request, requestresponse, none".
+	// The default audit log level is "metadata"
+	//
+	// see: https://kubernetes.io/docs/tasks/debug-application-cluster/audit/#audit-policy
+	// for more information about auditing and log levels.
+	Profile auditv1.Level `json:"profile"`
+}
+
+type Images struct {
+	K8sPrometheusAdapter               string
+	MetricsServer                      string
+	PromLabelProxy                     string
+	PrometheusOperatorAdmissionWebhook string
+	PrometheusOperator                 string
+	PrometheusConfigReloader           string
+	Prometheus                         string
+	Alertmanager                       string
+	NodeExporter                       string
+	KubeStateMetrics                   string
+	OpenShiftStateMetrics              string
+	KubeRbacProxy                      string
+	TelemeterClient                    string
+	Thanos                             string
+	MonitoringPlugin                   string
 }
